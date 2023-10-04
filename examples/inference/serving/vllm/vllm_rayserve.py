@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Any, AsyncGenerator
 
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from ray import serve
 from ray.serve import Application
 from starlette.background import BackgroundTask
@@ -25,23 +25,32 @@ ray_serve_logger = logging.getLogger("ray.serve")
 class GenConfigArgs(BaseModel):
     """Config for generation"""
 
-    path: str
-    tp_size: int = 2
-    # max_batch_size: int = 4
-    # max_input_len: int = 128
-    # max_output_len: int = 32
-    # engine_use_ray: bool = False # use Ray to start the LLM engine in a separate process as the server process.
+    model: str
+    tensor_parallel_size: int = 2
+    gpu_memory_utilization: float = 0.2
+    engine_use_ray: bool = True  # use Ray to start the LLM engine in a separate process as the server process.
     # max_num_batched_tokens: int = 2560 # maximum number of batched tokens per iteration
     # max_num_seqs: int = 8 # maximum number of sequences per iteration
 
+    @validator("model")
+    def validate_model_path_exists(cls, value):
+        if not os.path.exists(value):
+            raise ValueError(f"Path '{value}' does not exist.")
+        return value
 
+    @validator("tensor_parallel_size")
+    def validate_tensor_parallel_size(cls, value):
+        if value < 1:
+            raise ValueError("tensor_parallel_size must be >= 1.")
+        return value
+
+
+# By default we set engine_use_ray as True, then vllm AsyncLLMEngine will assign available gpus
+# to its workers and the deployment here does not require any gpus allocated
 @serve.deployment(ray_actor_options={"num_gpus": 0})
 class EngineDriver:
     def __init__(self, config: GenConfigArgs) -> None:
-        model_path = config.path
-        tp_size = config.tp_size
-
-        args = AsyncEngineArgs(model=model_path, gpu_memory_utilization=0.2, tensor_parallel_size=tp_size)
+        args = AsyncEngineArgs(**config.__dict__)  # FIXME Unformal way
         self.engine = AsyncLLMEngine.from_engine_args(args)
 
     # Adapted from vllm.entrypoints.api_server.py
@@ -61,13 +70,12 @@ class EngineDriver:
         await self.engine.abort(request_id)
 
     async def __call__(self, request: Request) -> Any:
-        # Refer to vllm.examples.api_client.py
+        # NOTE Refer to vllm.examples.api_client.py, we might want to add/use
         # prompt
         # n
         # use_beam_search
         # temperature
         # max_tokens
-        # stream
         request_dict = await request.json()
         prompt = request_dict.pop("prompt")
         stream = request_dict.pop("stream", False)
@@ -91,16 +99,15 @@ class EngineDriver:
         assert final_output is not None
         prompt = final_output.prompt
         text_outputs = [prompt + output.text for output in final_output.outputs]
+        ray_serve_logger.info(text_outputs)
         ret = {"text": text_outputs}
         return JSONResponse(ret)
 
 
 def app(args: GenConfigArgs) -> Application:
     print(args)
-    if args.path is None or not os.path.exists(args.path):
-        raise ValueError("Model path not provided or invalid path!")
 
     return EngineDriver.options(name="vLLM-Inference-Driver").bind(config=args)
 
 
-# RAY_DEDUP_LOGS=0 serve run Colossal_Inference_rayserve:app path="PATH_TO_YOUR_MODEL_DIR"
+# RAY_DEDUP_LOGS=0 serve run vllm_rayserve:app path="/home/lczyh/data3/models/model-4-serve/models--bigscience--bloom-560m/snapshots/4f42c91d806a19ae1a46af6c3fb5f4990d884cd6"
