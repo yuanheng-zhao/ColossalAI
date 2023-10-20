@@ -1,6 +1,6 @@
 # Colossal-Inference with Ray Serve
 
-This example is used for demonstrating and testing the deployment of Colossal Inference from `colossalai.inference` with [Ray Serve](https://docs.ray.io/en/latest/serve/index.html). It imports inference modules from colossalai and is based on https://github.com/hpcaitech/ColossalAI/tree/a22706337a57dd1c98b95739dd09d98bd55947a0.
+This example is used for demonstrating the deployment of Colossal Inference with [Ray Serve](https://docs.ray.io/en/latest/serve/index.html). It imports inference modules from colossalai and is based on commit https://github.com/hpcaitech/ColossalAI/tree/a22706337a57dd1c98b95739dd09d98bd55947a0.
 
 Single-gpu inference as well as multiple-gpu inference (i.e. tensor parallel) serving are supported.
 

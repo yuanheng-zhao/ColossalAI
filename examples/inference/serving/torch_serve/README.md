@@ -2,7 +2,7 @@
 
 ## Overview
 
-This demo is used for testing and demonstrating the usage of Colossal Inference from `colossalai.inference` with deployment with TorchServe. It imports inference modules from colossalai and is based on
+This demo is used for demonstrating the deployment of Colossal Inference with [TorchServe](https://pytorch.org/serve/). It imports inference modules from colossalai which is based on
 https://github.com/hpcaitech/ColossalAI/tree/3e05c07bb8921f2a8f9736b6f6673d4e9f1697d0. For now, single-gpu inference serving is supported.
 
 ## Environment for testing
@@ -60,7 +60,7 @@ docker run --rm \
 ## Steps to deploy a model
 
 ###  1.download/prepare a model
-We will download a bloom model, and then zip the downloaded model. You could download the model from [HuggingFace](https://huggingface.co/models) manually, or you might want to refer to this script [download_model.py](https://github.com/pytorch/serve/blob/c3ca2599b4d36d2b61302064b02eab1b65e1908d/examples/large_models/utils/Download_model.py) provided by pytorch-serve team to help you download a snapshot of the model.
+We will download a bloom model, and then zip the downloaded model. You could download the model from [HuggingFace](https://huggingface.co/models) manually, or you might want to refer to this script [download_model.py](https://github.com/pytorch/serve/blob/c3ca2599b4d36d2b61302064b02eab1b65e1908d/examples/large_models/utils/Download_model.py) written by [pytorch-serve](https://github.com/pytorch/serve) team to help you download a snapshot of the model.
 
 ```bash
 # download snapshots
