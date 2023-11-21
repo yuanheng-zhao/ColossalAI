@@ -29,13 +29,17 @@ except:
 
 try:
     from colossalai.kernel.triton.flash_decoding import token_flash_decoding
+
     HAS_TRITON_FLASH_DECODING_KERNEL = True
 except:
-    print("no triton flash decoding support, please install lightllm from https://github.com/ModelTC/lightllm/blob/ece7b43f8a6dfa74027adc77c2c176cff28c76c8")
+    print(
+        "no triton flash decoding support, please install lightllm from https://github.com/ModelTC/lightllm/blob/ece7b43f8a6dfa74027adc77c2c176cff28c76c8"
+    )
     HAS_TRITON_FLASH_DECODING_KERNEL = False
-    
+
 try:
     from flash_attn import flash_attn_with_kvcache
+
     HAS_FLASH_KERNEL = True
 except:
     HAS_FLASH_KERNEL = False
@@ -47,6 +51,7 @@ def rotate_half(x):
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
+
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
@@ -72,7 +77,7 @@ def llama_triton_context_attention(
                 attn_output,
                 infer_state.start_loc,
                 infer_state.seq_len,
-                infer_state.max_len_in_batch,
+                infer_state.past_key_values_len,
             )
         else:
             lightllm_context_attention_fwd(
@@ -82,7 +87,7 @@ def llama_triton_context_attention(
                 attn_output,
                 infer_state.start_loc,
                 infer_state.seq_len,
-                infer_state.max_len_in_batch,
+                infer_state.past_key_values_len,
             )
     else:
         assert HAS_LIGHTLLM_KERNEL is True, "You have to install lightllm kernels to run llama2 model"
@@ -96,17 +101,22 @@ def llama_triton_context_attention(
             infer_state.max_len_in_batch,
         )
 
-def llama_triton_token_attention(query_states, attn_output, infer_state, num_key_value_groups=1, q_head_num = -1, head_dim = -1):
+
+def llama_triton_token_attention(
+    query_states, attn_output, infer_state, num_key_value_groups=1, q_head_num=-1, head_dim=-1
+):
     if HAS_TRITON_FLASH_DECODING_KERNEL and q_head_num != -1 and head_dim != -1:
-        token_flash_decoding(q = query_states, 
-                                o_tensor = attn_output, 
-                                infer_state = infer_state, 
-                                q_head_num = q_head_num, 
-                                head_dim = head_dim, 
-                                cache_k = infer_state.cache_manager.key_buffer[infer_state.decode_layer_id], 
-                                cache_v = infer_state.cache_manager.value_buffer[infer_state.decode_layer_id])
-        return 
-    
+        token_flash_decoding(
+            q=query_states,
+            o_tensor=attn_output,
+            infer_state=infer_state,
+            q_head_num=q_head_num,
+            head_dim=head_dim,
+            cache_k=infer_state.cache_manager.key_buffer[infer_state.decode_layer_id],
+            cache_v=infer_state.cache_manager.value_buffer[infer_state.decode_layer_id],
+        )
+        return
+
     if num_key_value_groups == 1:
         token_attention_fwd(
             query_states,
@@ -116,7 +126,7 @@ def llama_triton_token_attention(query_states, attn_output, infer_state, num_key
             infer_state.block_loc,
             infer_state.start_loc,
             infer_state.seq_len,
-            infer_state.max_len_in_batch,
+            infer_state.past_key_values_len,
         )
     else:
         Llama2TokenAttentionForwards.token_attn(
@@ -127,7 +137,7 @@ def llama_triton_token_attention(query_states, attn_output, infer_state, num_key
             infer_state.block_loc,
             infer_state.start_loc,
             infer_state.seq_len,
-            infer_state.max_len_in_batch,
+            infer_state.past_key_values_len,
             infer_state.other_kv_index,
         )
 
@@ -241,30 +251,35 @@ class LlamaInferenceForwards:
             batch_size, seq_length = input_shape
             device = hidden_states.device
 
-        if infer_state.is_context_stage:
-            past_key_values_length = 0
-        else:
-            past_key_values_length = infer_state.max_len_in_batch - 1
+        # Update decode layer id in this BatchInferState
+        infer_state.decode_layer_id = 0
+
+        past_key_values_length = 0
+        seq_length_with_past = seq_length
+
+        # Differentiate between prefill/context stage and token generation stage
+        # Notify Attention layer as well
+        # NOTE This is a bit hacky that we determine the stage based on input seq_length
+        infer_state.is_context_stage = True if use_cache and seq_length != 1 else False
+        if not infer_state.is_context_stage:
+            past_key_values_length = infer_state.past_key_values_len
+            seq_length_with_past = seq_length + past_key_values_length
 
         # NOTE: differentiate with prefill stage
         #       block_loc require different value-assigning method for two different stage
-        if use_cache and seq_length != 1:
-            # NOTE assume prefill stage
-            # allocate memory block
-            infer_state.is_context_stage = True  # set prefill stage, notify attention layer
+        if infer_state.is_context_stage:
             infer_state.context_mem_index = infer_state.cache_manager.alloc(infer_state.total_token_num)
             infer_state.init_block_loc(
                 infer_state.block_loc, infer_state.seq_len, seq_length, infer_state.context_mem_index
             )
         else:
-            infer_state.is_context_stage = False
             alloc_mem = infer_state.cache_manager.alloc_contiguous(batch_size)
             if alloc_mem is not None:
                 infer_state.decode_is_contiguous = True
                 infer_state.decode_mem_index = alloc_mem[0]
                 infer_state.decode_mem_start = alloc_mem[1]
                 infer_state.decode_mem_end = alloc_mem[2]
-                infer_state.block_loc[:, infer_state.max_len_in_batch - 1] = infer_state.decode_mem_index
+                infer_state.block_loc[:, seq_length_with_past - 1] = infer_state.decode_mem_index
             else:
                 infer_state.decode_is_contiguous = False
                 alloc_mem = infer_state.cache_manager.alloc(batch_size)
@@ -297,19 +312,18 @@ class LlamaInferenceForwards:
         # embed positions
         if attention_mask is None:
             attention_mask = torch.ones(
-                (batch_size, infer_state.max_len_in_batch), dtype=torch.bool, device=hidden_states.device
+                (batch_size, seq_length_with_past), dtype=torch.bool, device=hidden_states.device
             )
 
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, (batch_size, seq_length), hidden_states, past_key_values_length
         )
 
-        # decoder layers
-        infer_state.decode_layer_id = 0
-
         start_idx, end_idx = stage_index[0], stage_index[1]
         if past_key_values is None:
             past_key_values = tuple([None] * (end_idx - start_idx + 1))
+
+        infer_state.past_key_values_len += seq_length
 
         for idx, past_key_value in zip(range(start_idx, end_idx), past_key_values):
             decoder_layer = self.layers[idx]
@@ -459,16 +473,16 @@ class LlamaInferenceForwards:
                 )
 
             if HAS_LIGHTLLM_KERNEL:
-                
                 attn_output = torch.empty_like(query_states)
-                llama_triton_token_attention(query_states = query_states, 
-                                             attn_output = attn_output, 
-                                             infer_state = infer_state, 
-                                             num_key_value_groups = self.num_key_value_groups, 
-                                             q_head_num = q_len * self.num_heads, 
-                                             head_dim = self.head_dim)
+                llama_triton_token_attention(
+                    query_states=query_states,
+                    attn_output=attn_output,
+                    infer_state=infer_state,
+                    num_key_value_groups=self.num_key_value_groups,
+                    q_head_num=q_len * self.num_heads,
+                    head_dim=self.head_dim,
+                )
             else:
-                self.num_heads // self.num_key_value_heads
                 cache_k = infer_state.cache_manager.key_buffer[infer_state.decode_layer_id]
                 cache_v = infer_state.cache_manager.value_buffer[infer_state.decode_layer_id]
 
