@@ -72,8 +72,32 @@ def run_tp_pipeline_inference(rank, world_size, port, args):
     run_inference(args)
 
 
+def run_hf(args):
+    llama_model_path = args.model_path
+    llama_tokenize_path = args.tokenizer_path or args.model_path
+    max_input_len = args.max_input_len
+    max_output_len = args.max_output_len
+
+    tokenizer = LlamaTokenizer.from_pretrained(llama_tokenize_path, padding_side="left")
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    model = LlamaForCausalLM.from_pretrained(llama_model_path, pad_token_id=tokenizer.pad_token_id)
+
+    model = model.to(get_current_device())
+
+    inputs = tokenizer(INPUT_TEXTS, return_tensors="pt", padding="longest", max_length=max_input_len, truncation=True)
+    inputs = {k: v.to(get_current_device()) for k, v in inputs.items()}
+    outputs = model.generate(**inputs, max_length=max_output_len)
+
+    output_texts = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    for input_text, output_text in zip(INPUT_TEXTS, output_texts):
+        print(f"Input: {input_text}")
+        print(f"Output: {output_text}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-e", "--engine", nargs="+", choices=["hg", "cai"], required=True)
     parser.add_argument("-p", "--model_path", type=str, help="Model path", required=True)
     parser.add_argument("-i", "--input", default="What is the longest river in the world?")
     parser.add_argument("-t", "--tokenizer_path", type=str, help="Tokenizer path", default=None)
@@ -95,4 +119,8 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", default="fp16", type=str)
 
     args = parser.parse_args()
-    spawn(run_tp_pipeline_inference, nprocs=args.tp_size * args.pp_size, args=args)
+
+    if "hg" in args.engine:
+        run_hf(args)
+    if "cai" in args.engine:
+        spawn(run_tp_pipeline_inference, nprocs=args.tp_size * args.pp_size, args=args)
