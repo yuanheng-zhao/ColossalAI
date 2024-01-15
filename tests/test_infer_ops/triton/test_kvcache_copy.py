@@ -91,7 +91,6 @@ def test_copy_kv_to_caches(
         device=device,
         dtype=dtype,
     )
-
     copy_kv_to_blocked_cache(new_k, k_cache, context_lengths, block_tables)
 
     for seq_i in range(bsz):
@@ -106,6 +105,8 @@ def test_copy_kv_to_caches(
 
 
 BATCH = 4
+WARMUP = 10
+REPS = 100
 configs = [
     triton.testing.Benchmark(
         x_names=["PAST_KVLEN"],
@@ -131,13 +132,12 @@ def benchmark_kvcache_copy(
     num_kv_heads: int,
     same_context_len: bool,
 ):
-    warmup = 10
-    rep = 100
+    warmup = WARMUP
+    rep = REPS
 
     head_dim = 128
     dtype = torch.float16
     device = get_current_device()
-
     assert PAST_KVLEN < max_seq_len, "Assigned maximum past kv length must be smaller or equal to maximum seq len"
 
     new_k, k_cache, context_lengths, block_tables = prepare_data(
@@ -151,7 +151,6 @@ def benchmark_kvcache_copy(
         device=device,
         dtype=dtype,
     )
-
     if provider == "torch_copy_func":
         fn = lambda: copy_to_cache(new_k, k_cache, lengths=context_lengths, block_tables=block_tables, type="decoding")
     elif provider == "triton_copy_func":
